@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 
+import argparse
 import math
-import multiprocessing
 import sys
 import threading
 
@@ -332,7 +332,7 @@ def render_tile(queue):
         sys.stdout.flush()
 
 
-def render(img):
+def render(img, thread_count):
 
     world = World()
 
@@ -355,14 +355,17 @@ def render(img):
 
     start_time = time()
 
-    core_count = multiprocessing.cpu_count()
-    tile_width = 256
+    # Set the tile width to be a power of two
+    tile_width = 1
+    while 2*tile_width < img.size[0]/thread_count:
+        tile_width *= 2
+
     tile_height = tile_width
     tile_count_x = (img.size[0] + tile_width - 1) / tile_width
     tile_count_y = (img.size[1] + tile_width - 1) / tile_height
 
-    print "Chunking: %d cores with %d %dx%d (%dk/tile) tiles" % \
-        (core_count, tile_count_x*tile_count_y, tile_width,
+    print "Chunking: %d threads with %d %dx%d (%dk/tile) tiles" % \
+        (thread_count, tile_count_x*tile_count_y, tile_width,
          tile_height, tile_width*tile_height*4/1024)
 
     queue = WorkQueue()
@@ -378,7 +381,7 @@ def render(img):
             queue.work_orders.append((world, img, min_x, min_y, max_x, max_y))
 
     threads = list()
-    for core in xrange(core_count):
+    for _ in xrange(thread_count):
         t = threading.Thread(target=render_tile, args=(queue,))
         t.start()
         threads.append(t)
@@ -398,10 +401,16 @@ def render(img):
 
 def main():
 
+    parser = argparse.ArgumentParser(description='A Simple Ray Tracer')
+    parser.add_argument('-t', '--threads', type=int, default=1, nargs='?',
+                        help='Number of threads to use')
+
+    args = parser.parse_args()
+
     img = Image.new('RGB', (WIDTH, HEIGHT), "black")
 
     print "Rendering...",
-    render(img)
+    render(img, thread_count=args.threads)
     print "done."
 
     img.save('output.png')
