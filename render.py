@@ -1,7 +1,9 @@
 #!/usr/bin/env python
 
 import argparse
+import collections
 import math
+import multiprocessing
 import sys
 import threading
 
@@ -9,35 +11,21 @@ from PIL import Image
 from random import random
 from time import time
 
-render_profile = "QUICK_SMALL"
+# render_profile = "QUICK_SMALL"
 # render_profile = "PRETTY_SMALL"
 # render_profile = "SINGLE_PASS"
 # render_profile = "Infinity"
 
-if render_profile == "QUICK_SMALL":
-    WIDTH = 1920/4
-    HEIGHT = 1024/4
+Render_Profile = collections.namedtuple('Render_Profile',
+                                        'name width height \
+                                        rays_per_pixel max_bounce')
 
-    RAYS_PER_PIXEL = 4
-    MAX_BOUNCE = 4
-elif render_profile == "SINGLE_PASS":
-    WIDTH = 1920
-    HEIGHT = 1024
-
-    RAYS_PER_PIXEL = 1
-    MAX_BOUNCE = 4
-elif render_profile == "PRETTY_SMALL":
-    WIDTH = 1920/4
-    HEIGHT = 1024/4
-
-    RAYS_PER_PIXEL = 10
-    MAX_BOUNCE = 4
-else:
-    WIDTH = 1920
-    HEIGHT = 1024
-
-    RAYS_PER_PIXEL = 256
-    MAX_BOUNCE = 8
+RENDER_PROFILES = [
+    Render_Profile("smallfast", 1920/4, 1024/4, 4, 4),
+    Render_Profile("singlepass", 1920, 1080, 1, 4),
+    Render_Profile("smallpretty", 1920/4, 1024/4, 10, 4),
+    Render_Profile("slow", 1920, 1080, 256, 8)
+]
 
 
 class V3(object):
@@ -178,7 +166,7 @@ class WorkQueue(object):
         self.total_tile_count = 0
 
 
-def cast_ray(world, ray_origin, ray_dir):
+def cast_ray(world, render_profile, ray_origin, ray_dir):
     result = V3(0, 0, 0)
     attenuation = V3(1, 1, 1)
 
@@ -187,7 +175,7 @@ def cast_ray(world, ray_origin, ray_dir):
 
     bounces_computed = 0
 
-    for bounce_count in xrange(MAX_BOUNCE):
+    for bounce_count in xrange(render_profile.max_bounce):
         bounces_computed += 1
         hit_dist = 10**100
 
@@ -266,7 +254,7 @@ def render_tile(queue):
 
     while len(queue.work_orders) > 0:
         work_order = queue.work_orders.pop()
-        world, image, x_min, y_min, x_max, y_max = work_order
+        world, image, render_profile, x_min, y_min, x_max, y_max = work_order
 
         camera_pos = V3(0, -10, 1)
         camera_z = NoZ(camera_pos)
@@ -303,8 +291,8 @@ def render_tile(queue):
                 film_y = -1.0+2.0*y/image_height
 
                 color = V3()
-                fraction = 1.0/RAYS_PER_PIXEL
-                for _ in xrange(RAYS_PER_PIXEL):
+                fraction = 1.0/render_profile.rays_per_pixel
+                for _ in xrange(render_profile.rays_per_pixel):
 
                     off_x = film_x + (random()*2-1)*pix_width
                     off_y = film_y + (random()*2-1)*pix_height
@@ -315,7 +303,8 @@ def render_tile(queue):
                     ray_origin = camera_pos
                     ray_dir = NoZ(film_p - camera_pos)
 
-                    result = cast_ray(world, ray_origin, ray_dir)
+                    result = cast_ray(world, render_profile,
+                                      ray_origin, ray_dir)
 
                     color += result*fraction
 
@@ -332,7 +321,9 @@ def render_tile(queue):
         sys.stdout.flush()
 
 
-def render(img, thread_count):
+def render(profile, thread_count):
+
+    img = Image.new('RGB', (profile.width, profile.height), "black")
 
     world = World()
 
@@ -378,7 +369,8 @@ def render(img, thread_count):
             min_y = tile_y*tile_height
             max_y = min(img.size[1], min_y + tile_height)
 
-            queue.work_orders.append((world, img, min_x, min_y, max_x, max_y))
+            queue.work_orders.append((world, img, profile,
+                                      min_x, min_y, max_x, max_y))
 
     threads = list()
     for _ in xrange(thread_count):
@@ -398,19 +390,31 @@ def render(img, thread_count):
     print "Performance: %fms/bounce" % \
         (casting_time / (queue.bounces_computed+0.01))
 
+    return img
+
 
 def main():
 
     parser = argparse.ArgumentParser(description='A Simple Ray Tracer')
-    parser.add_argument('-t', '--threads', type=int, default=1, nargs='?',
+    parser.add_argument('-t', '--threads', type=int,
+                        default=multiprocessing.cpu_count(), nargs='?',
                         help='Number of threads to use')
+    parser.add_argument('-y', '--height', type=int, default=1080/4, nargs='?',
+                        help='Image Height in pixels')
+    parser.add_argument('-x', '--width', type=int, default=1920/4, nargs='?',
+                        help='Image Width in pixels')
+    parser.add_argument('-rpp', '--rays_per_pixel', type=int, default=1,
+                        nargs='?', help='Image Height in pixels')
+    parser.add_argument('-mb', '--max_bounce', type=int, default=4, nargs='?',
+                        help='Image Width in pixels')
 
     args = parser.parse_args()
 
-    img = Image.new('RGB', (WIDTH, HEIGHT), "black")
+    profile = Render_Profile('test', args.width, args.height,
+                             args.rays_per_pixel, args.max_bounce)
 
     print "Rendering...",
-    render(img, thread_count=args.threads)
+    img = render(profile, args.threads)
     print "done."
 
     img.save('output.png')
