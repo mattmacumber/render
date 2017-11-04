@@ -11,24 +11,14 @@ from PIL import Image
 from random import random
 from time import time
 
-# render_profile = "QUICK_SMALL"
-# render_profile = "PRETTY_SMALL"
-# render_profile = "SINGLE_PASS"
-# render_profile = "Infinity"
-
+""" Things you need to know to render a scene """
 Render_Profile = collections.namedtuple('Render_Profile',
                                         'name width height \
                                         rays_per_pixel max_bounce')
 
-RENDER_PROFILES = [
-    Render_Profile("smallfast", 1920/4, 1024/4, 4, 4),
-    Render_Profile("singlepass", 1920, 1080, 1, 4),
-    Render_Profile("smallpretty", 1920/4, 1024/4, 10, 4),
-    Render_Profile("slow", 1920, 1080, 256, 8)
-]
-
 
 class V3(object):
+    """ Element of a 3 dimensional vector space """
     def __init__(self, x=0, y=0, z=0):
         self.x = float(x)
         self.y = float(y)
@@ -72,32 +62,45 @@ class V3(object):
 
 
 def lerp(a, t, b):
+    """ linear interpolation
+    0 <= t <= 1
+    return a value between a and b porportional to t
+    """
     return (1.0 - t)*a + t*b
 
 
 def Hadamard(a, b):
+    """ Hadamard product
+    return the entrywise product of two inputs
+    """
     return V3(a.x*b.x, a.y*b.y, a.z*b.z)
 
 
 def Inner(a, b):
+    """ The inner/dot product """
     return a.x*b.x + a.y*b.y + a.z*b.z
 
 
 def LengthSq(v3):
+    """ The square of the length of the vector """
     return Inner(v3, v3)
 
 
-def NoZ(v3):
+def NoZ(v3, e=0.0001):
+    """ Normalize or Zero
+    Normalize the vector if it is big enough, otherwize return the 0 vector
+    """
     ret = V3()
 
     lensq = LengthSq(v3)
-    if(lensq > (0.0001)**2):
+    if(lensq > e**2):
         ret = v3 * (1.0 / math.sqrt(lensq))
 
     return ret
 
 
 def Cross(a, b):
+    """ The cross product (or vector product) "a x b" """
     ret = V3()
 
     ret.x = a.y*b.z - a.z*b.y
@@ -108,6 +111,7 @@ def Cross(a, b):
 
 
 def Linear1ToRGB255(c):
+    """ Map a 0..1 v3 to 0..255 """
     ret = V3()
     ret.x = int(255*math.sqrt(c.x))
     ret.y = int(255*math.sqrt(c.y))
@@ -117,6 +121,7 @@ def Linear1ToRGB255(c):
 
 
 def LinearToRGB(linear):
+    """ "gamma" correction for a linear V3 """
     gamma = None
 
     linear = max(0, linear)
@@ -131,6 +136,7 @@ def LinearToRGB(linear):
 
 
 class World(object):
+    """ All of the objects and materials in a scene """
     def __init__(self):
         self.materials = list()
         self.planes = list()
@@ -138,6 +144,7 @@ class World(object):
 
 
 class Sphere(object):
+    """ Round, in 3 dimensions """
     def __init__(self, v3, radius, material):
         self.center = v3
         self.radius = radius
@@ -145,6 +152,7 @@ class Sphere(object):
 
 
 class Plane(object):
+    """ Flat, in 2 dimensions """
     def __init__(self, n, d, material):
         self.n = n
         self.d = d
@@ -152,6 +160,7 @@ class Plane(object):
 
 
 class Material(object):
+    """ The thing things are made of """
     def __init__(self, emit_color=V3(), refl_color=V3(), scatter=0.0):
         self.emit_color = emit_color
         self.refl_color = refl_color
@@ -159,6 +168,7 @@ class Material(object):
 
 
 class WorkQueue(object):
+    """ Chunks of rendering work """
     def __init__(self):
         self.work_orders = list()
         self.bounces_computed = 0
@@ -167,6 +177,7 @@ class WorkQueue(object):
 
 
 def cast_ray(world, render_profile, ray_origin, ray_dir):
+    """ Cast a ray into the world """
     result = V3(0, 0, 0)
     attenuation = V3(1, 1, 1)
 
@@ -250,7 +261,7 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
     return result
 
 
-def render_tile(queue):
+def render_worker(queue):
 
     while len(queue.work_orders) > 0:
         work_order = queue.work_orders.pop()
@@ -374,7 +385,7 @@ def render(profile, thread_count):
 
     threads = list()
     for _ in xrange(thread_count):
-        t = threading.Thread(target=render_tile, args=(queue,))
+        t = threading.Thread(target=render_worker, args=(queue,))
         t.start()
         threads.append(t)
 
