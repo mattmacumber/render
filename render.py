@@ -111,7 +111,7 @@ def Cross(a, b):
 
 
 def Linear1ToRGB255(c):
-    """ Map a 0..1 v3 to 0..255 """
+    """ Map a V3(0..1) v3 to int V3(0..255) """
     ret = V3()
     ret.x = int(255*math.sqrt(c.x))
     ret.y = int(255*math.sqrt(c.y))
@@ -138,7 +138,7 @@ def LinearToRGB(linear):
 class World(object):
     """ All of the objects and materials in a scene """
     def __init__(self):
-        self.materials = list()
+        self.default_material = Material()
         self.planes = list()
         self.spheres = list()
 
@@ -262,6 +262,9 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
 
 
 def render_worker(queue):
+    """ Process the given work queue
+    Grab an item from the work queue and render the portion of the image
+    """
 
     while len(queue.work_orders) > 0:
         work_order = queue.work_orders.pop()
@@ -333,6 +336,7 @@ def render_worker(queue):
 
 
 def load_world():
+    """ Return a populated world object """
 
     world = World()
 
@@ -357,12 +361,11 @@ def load_world():
 
 
 def render(profile, thread_count):
+    """ Use the given render profile and thread cound to render """
 
     img = Image.new('RGB', (profile.width, profile.height), "black")
 
     world = load_world()
-    print len(world.planes)
-    print len(world.spheres)
 
     start_time = time()
 
