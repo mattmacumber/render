@@ -255,7 +255,7 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
                                pure_bounce))
 
         else:
-            result += Hadamard(attenuation, world.materials[0].emit_color)
+            result += Hadamard(attenuation, world.default_material.emit_color)
             break
 
     return result
@@ -332,28 +332,37 @@ def render_worker(queue):
         sys.stdout.flush()
 
 
+def load_world():
+
+    world = World()
+
+    p = Plane(V3(0, 0, 1), 0, Material(V3(0, 0, 0), V3(0.5, 0.5, 0.5), 0.0))
+    world.planes.append(p)
+
+    world.default_material = Material(V3(0.3, 0.4, 0.5), V3(0, 0, 0), 0.0)
+
+    world.spheres.append(Sphere(V3(0, 0, 0), 1.0,
+                                Material(V3(0, 0, 0), V3(0.7, 0.5, 0.3), 0.0)))
+    world.spheres.append(Sphere(V3(3, -2, 0), 1.0,
+                                Material(V3(2.0, 0.0, 0.0), V3(0, 0, 0), 0.0)))
+    world.spheres.append(Sphere(V3(-2, -1, 2), 1.0,
+                                Material(V3(0, 0, 0), V3(0.2, 0.8, 0.2), 0.7)))
+    world.spheres.append(Sphere(V3(1, -1, 3), 1.0,
+                                Material(V3(0, 0, 0), V3(0.4, 0.8, 0.9), 0.85)))
+    world.spheres.append(Sphere(V3(-2, 3, 0), 2.0,
+                                Material(V3(0, 0, 0),
+                                         V3(0.95, 0.95, 0.95), 1.0)))
+
+    return world
+
+
 def render(profile, thread_count):
 
     img = Image.new('RGB', (profile.width, profile.height), "black")
 
-    world = World()
-
-    world.materials.append(Material(V3(0.3, 0.4, 0.5), V3(0, 0, 0), 0.0))
-    world.materials.append(Material(V3(0, 0, 0), V3(0.5, 0.5, 0.5), 0.0))
-    world.materials.append(Material(V3(0, 0, 0), V3(0.7, 0.5, 0.3), 0.0))
-    world.materials.append(Material(V3(2.0, 0.0, 0.0), V3(0, 0, 0), 0.0))
-    world.materials.append(Material(V3(0, 0, 0), V3(0.2, 0.8, 0.2), 0.7))
-    world.materials.append(Material(V3(0, 0, 0), V3(0.4, 0.8, 0.9), 0.85))
-    world.materials.append(Material(V3(0, 0, 0), V3(0.95, 0.95, 0.95), 1.0))
-
-    p = Plane(V3(0, 0, 1), 0, world.materials[1])
-    world.planes.append(p)
-
-    world.spheres.append(Sphere(V3(0, 0, 0), 1.0, world.materials[2]))
-    world.spheres.append(Sphere(V3(3, -2, 0), 1.0, world.materials[3]))
-    world.spheres.append(Sphere(V3(-2, -1, 2), 1.0, world.materials[4]))
-    world.spheres.append(Sphere(V3(1, -1, 3), 1.0, world.materials[5]))
-    world.spheres.append(Sphere(V3(-2, 3, 0), 2.0, world.materials[6]))
+    world = load_world()
+    print len(world.planes)
+    print len(world.spheres)
 
     start_time = time()
 
