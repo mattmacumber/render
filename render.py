@@ -4,12 +4,10 @@ import argparse
 import collections
 import math
 import multiprocessing
-import sys
-import threading
 
 from PIL import Image
 from random import random
-from time import time
+import time
 
 """ Things you need to know to render a scene """
 Render_Profile = collections.namedtuple('Render_Profile',
@@ -20,9 +18,13 @@ Render_Profile = collections.namedtuple('Render_Profile',
 class V3(object):
     """ Element of a 3 dimensional vector space """
     def __init__(self, x=0, y=0, z=0):
-        self.x = float(x)
-        self.y = float(y)
-        self.z = float(z)
+        try:
+            self.x = float(x)
+            self.y = float(y)
+            self.z = float(z)
+        except Exception as e:
+            print e
+            print x, y, z
 
     def __str__(self):
         return '<V3>({0.x:.3}, {0.y:.3}, {0.z:.3})'.format(self)
@@ -120,17 +122,11 @@ def Linear1ToRGB255(c):
     return ret
 
 
-def LinearToRGB(linear):
+def Gamma(linearV3):
     """ "gamma" correction for a linear V3 """
-    gamma = None
 
-    linear = max(0, linear)
-    linear = min(1, linear)
-
-    if linear <= 0.0031308:
-        gamma = linear * 12.92
-    else:
-        gamma = 1.055*linear**(1.0/2.4)-0.055
+    gamma = V3(*[e*12.92 if e < 0.0031308 else 1.055*e**(1.0/2.4)-0.055
+               for e in linearV3.tuple()])
 
     return gamma
 
@@ -167,15 +163,6 @@ class Material(object):
         self.scatter = scatter
 
 
-class WorkQueue(object):
-    """ Chunks of rendering work """
-    def __init__(self):
-        self.work_orders = list()
-        self.bounces_computed = 0
-        self.tiles_rendered = 0
-        self.total_tile_count = 0
-
-
 def cast_ray(world, render_profile, ray_origin, ray_dir):
     """ Cast a ray into the world """
     result = V3(0, 0, 0)
@@ -184,10 +171,7 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
     min_hit_distance = 0.001
     tolerance = 0.0001
 
-    bounces_computed = 0
-
-    for bounce_count in xrange(render_profile.max_bounce):
-        bounces_computed += 1
+    for _ in xrange(render_profile.max_bounce):
         hit_dist = 10**100
 
         hit_material = None
@@ -196,9 +180,8 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
 
         for plane in world.planes:
             denom = Inner(plane.n, ray_dir)
-            if denom < -tolerance or tolerance < denom:
-                t = (- plane.d - Inner(plane.n, ray_origin)) / \
-                    denom
+            if abs(denom) > tolerance:
+                t = (- plane.d - Inner(plane.n, ray_origin)) / denom
                 if 0 < t < hit_dist:
                     hit_dist = t
                     hit_material = plane.material
@@ -214,8 +197,7 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
                 - sphere.radius**2
 
             denom = 2*a
-            sqrd = b*b-4*a*c
-            sqrd = max(0, sqrd)
+            sqrd = max(0, b*b-4*a*c)
             root_term = math.sqrt(sqrd)
             if root_term > tolerance:
 
@@ -243,12 +225,10 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
 
             ray_origin += hit_dist * ray_dir
 
-            pure_bounce = ray_dir - \
-                2*Inner(ray_dir, next_normal)*next_normal
-            random_bounce = NoZ(next_normal +
-                                V3(random()*2-1,
-                                    random()*2-1,
-                                    random()*2-1))
+            pure_bounce = ray_dir - 2*Inner(ray_dir, next_normal)*next_normal
+            random_bounce = NoZ(next_normal + V3(random()*2-1,
+                                                 random()*2-1,
+                                                 random()*2-1))
 
             ray_dir = NoZ(lerp(random_bounce,
                                hit_material.scatter,
@@ -261,78 +241,88 @@ def cast_ray(world, render_profile, ray_origin, ray_dir):
     return result
 
 
-def render_worker(queue):
+Work_Order = collections.namedtuple('Work_Order', 'world render_profile \
+                                    x_min_px x_max_px y_min_px y_max_px')
+
+
+def render_worker(idnum, in_queue, out_queue):
     """ Process the given work queue
     Grab an item from the work queue and render the portion of the image
     """
 
-    while len(queue.work_orders) > 0:
-        work_order = queue.work_orders.pop()
-        world, image, render_profile, x_min, y_min, x_max, y_max = work_order
+    while not in_queue.empty():
+        try:
+            work_order = in_queue.get_nowait()
+        except Exception as e:
+            print idnum, "Bad get in in_queue", e
+            time.sleep(random.rand())
+            continue
+
+        render_profile = work_order.render_profile
+
+        img = Image.new('RGB', (work_order.x_max_px-work_order.x_min_px,
+                                work_order.y_max_px-work_order.y_min_px),
+                        "blue")
 
         camera_pos = V3(0, -10, 1)
         camera_z = NoZ(camera_pos)
         camera_x = NoZ(Cross(camera_z, V3(0, 0, 1)))
         camera_y = NoZ(Cross(camera_z, camera_x))
 
-        image_width = image.size[0]
-        image_height = image.size[1]
+        image_width = render_profile.width
+        image_height = render_profile.height
 
         film_dist = 1.0
         film_w = 1.0
         film_h = 1.0
 
+        # Match the film aspect ratio to match the image
         if image_width > image_height:
             film_h = film_w * image_height/image_width
         else:
             film_w = film_h * image_width/image_height
 
-        film_half_w = film_w/2.0
-        film_half_h = film_h/2.0
-
         film_center = camera_pos - film_dist*camera_z
 
-        pix_width = 0.5 / image_width
-        pix_height = 0.5 / image_height
+        pix_width = 1.0 / image_width
+        pix_height = 1.0 / image_height
 
-        pixels = image.load()
+        pixels = img.load()
 
-        bounces_computed = 0
-
-        for x in xrange(x_min, x_max):
+        for x in xrange(work_order.x_min_px, work_order.x_max_px):
             film_x = -1.0+2.0*x/image_width
-            for y in range(y_min, y_max):
+            for y in range(work_order.y_min_px, work_order.y_max_px):
                 film_y = -1.0+2.0*y/image_height
 
                 color = V3()
+
+                # Cast multiple rays and composite them equally
                 fraction = 1.0/render_profile.rays_per_pixel
                 for _ in xrange(render_profile.rays_per_pixel):
 
-                    off_x = film_x + (random()*2-1)*pix_width
-                    off_y = film_y + (random()*2-1)*pix_height
+                    # add a < 1 px jitter to each ray
+                    off_x = film_x + (random()*2-1)*pix_width/2.0
+                    off_y = film_y + (random()*2-1)*pix_height/2.0
 
-                    film_p = film_center + off_x*film_half_w*camera_x + \
-                        off_y*film_half_h*camera_y
+                    film_p = film_center - off_x*film_w/2.0*camera_x + \
+                        off_y * film_h/2.0 * camera_y
 
                     ray_origin = camera_pos
                     ray_dir = NoZ(film_p - camera_pos)
 
-                    result = cast_ray(world, render_profile,
+                    result = cast_ray(work_order.world, render_profile,
                                       ray_origin, ray_dir)
 
                     color += result*fraction
-
-                pixel = V3(LinearToRGB(color.x),
-                           LinearToRGB(color.y),
-                           LinearToRGB(color.z))
+                pixel = Gamma(color)
                 pixel = Linear1ToRGB255(pixel)
-                pixels[image_width - x - 1, y] = pixel.tuple()
+                try:
+                    pixels[x-work_order.x_min_px,
+                           y-work_order.y_min_px] = pixel.tuple()
+                except Exception as e:
+                    print e
 
-        queue.bounces_computed += bounces_computed
-        queue.tiles_rendered += 1
-        print "\rRaycasting %1.2f %%...   " % \
-            (100.0*queue.tiles_rendered/(queue.total_tile_count)),
-        sys.stdout.flush()
+        out_queue.put((work_order, img))
 
 
 def load_world():
@@ -367,51 +357,49 @@ def render(profile, thread_count):
 
     world = load_world()
 
-    start_time = time()
+    start_time = time.time()
 
     # Set the tile width to be a power of two
     tile_width = 1
-    while 2*tile_width < img.size[0]/thread_count:
+    while 2*tile_width <= img.size[0]/math.sqrt(thread_count):
         tile_width *= 2
 
     tile_height = tile_width
     tile_count_x = (img.size[0] + tile_width - 1) / tile_width
     tile_count_y = (img.size[1] + tile_width - 1) / tile_height
 
-    print "Chunking: %d threads with %d %dx%d (%dk/tile) tiles" % \
-        (thread_count, tile_count_x*tile_count_y, tile_width,
-         tile_height, tile_width*tile_height*4/1024)
+    print "Chunking: %d threads with %d %dx%d tiles" % \
+        (thread_count, tile_count_x*tile_count_y, tile_width, tile_height)
 
-    queue = WorkQueue()
-    queue.total_tile_count = tile_count_x * tile_count_y
+    job_queue = multiprocessing.Queue()
+    image_queue = multiprocessing.Queue()
 
     for tile_x in xrange(tile_count_x):
-        min_x = tile_x*tile_width
-        max_x = min(img.size[0], min_x + tile_width)
+        x_min = tile_x*tile_width
+        x_max = min(img.size[0], x_min + tile_width)
         for tile_y in xrange(tile_count_y):
-            min_y = tile_y*tile_height
-            max_y = min(img.size[1], min_y + tile_height)
+            y_min = tile_y*tile_height
+            y_max = min(img.size[1], y_min + tile_height)
 
-            queue.work_orders.append((world, img, profile,
-                                      min_x, min_y, max_x, max_y))
+            work_order = Work_Order(world, profile, x_min, x_max, y_min, y_max)
+            job_queue.put(work_order)
 
-    threads = list()
-    for _ in xrange(thread_count):
-        t = threading.Thread(target=render_worker, args=(queue,))
-        t.start()
-        threads.append(t)
+    procs = list()
+    for n in xrange(thread_count):
+        proc = multiprocessing.Process(target=render_worker,
+                                       args=(n, job_queue, image_queue))
+        proc.start()
+        procs.append(proc)
 
-    for thread in threads:
-        thread.join()
+    for x in xrange(tile_count_x):
+        for y in xrange(tile_count_y):
+            work_order, tile = image_queue.get()
+            img.paste(tile, (work_order.x_min_px, work_order.y_min_px))
 
-    end_time = time()
+    end_time = time.time()
     casting_time = (end_time - start_time)*1000
 
-    print "\n"
     print "Raycasting time: %dms" % casting_time
-    print "Total bounces: %d" % queue.bounces_computed
-    print "Performance: %fms/bounce" % \
-        (casting_time / (queue.bounces_computed+0.01))
 
     return img
 
